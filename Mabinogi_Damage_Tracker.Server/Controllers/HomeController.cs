@@ -167,11 +167,34 @@ namespace Mabinogi_Damage_tracker.Controllers
         {
             return Json(Parser.adapter_description);
         }
+
+        public JsonResult GetShowEnemyId()
+        {
+            return Json(db_helper.Get_Local_Show_Enemy_Id());
+        }
+
+        public JsonResult GetCaptureFilterMode()
+        {
+            return Json(db_helper.Get_Local_Capture_Filter_Mode());
+        }
         
         public IActionResult SaveAdapter(string adapter)
         {
             db_helper.Set_Local_Adapter(adapter);
             return Ok(adapter);
+        }
+
+        public IActionResult SaveCaptureFilterMode(string mode)
+        {
+            db_helper.Set_Local_Capture_Filter_Mode(mode);
+            return Ok(mode);
+        }
+
+        public IActionResult SaveShowEnemyId(bool show)
+        {
+            db_helper.Set_Local_Show_Enemy_Id(show);
+            Parser.Set_Show_Enemy_Id(show);
+            return Ok(show);
         }
 
         public ActionResult Clear_Damage_DB()
