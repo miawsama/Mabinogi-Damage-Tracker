@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -63,6 +64,13 @@ namespace Mabinogi_Damage_tracker
                         adapter TEXT
                     )";
 
+                string create_settings = @"
+                    CREATE TABLE IF NOT EXISTS local_settings(
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        setting_key TEXT UNIQUE,
+                        setting_value TEXT
+                    )";
+
 
                 sqliteCommand.CommandText = create_playerid;
                 sqliteCommand.ExecuteNonQuery();
@@ -73,6 +81,8 @@ namespace Mabinogi_Damage_tracker
                 sqliteCommand.CommandText = create_recording;
                 sqliteCommand.ExecuteNonQuery();
                 sqliteCommand.CommandText = create_adapter;
+                sqliteCommand.ExecuteNonQuery();
+                sqliteCommand.CommandText = create_settings;
                 sqliteCommand.ExecuteNonQuery();
             }
         }
@@ -97,6 +107,32 @@ namespace Mabinogi_Damage_tracker
             {
                 Debug.WriteLine("could not send sql command");
             }
+        }
+
+        public static string Get_Player_Name(Int64 playerid)
+        {
+            try
+            {
+                using (SqliteConnection connection = new SqliteConnection(db_connection))
+                {
+                    connection.Open();
+                    SqliteCommand command = new SqliteCommand(@"
+                    SELECT playername FROM players WHERE playerid = @playerid limit 1
+                    ", connection);
+                    command.Parameters.AddWithValue("@playerid", playerid);
+                    object result = command.ExecuteScalar();
+                    if (result != null && result != DBNull.Value)
+                    {
+                        return result.ToString() ?? "";
+                    }
+                }
+            }
+            catch
+            {
+                Debug.WriteLine("could not send sql command");
+            }
+
+            return "";
         }
 
         public static List<object> Get_All_Players()
@@ -963,6 +999,117 @@ namespace Mabinogi_Damage_tracker
                             values(@adapter)
                     ", connection);
                     command.Parameters.AddWithValue("@adapter", adapter);
+                    command.ExecuteNonQuery();
+                }
+            }
+            catch
+            {
+                Debug.WriteLine("could not send sql command");
+            }
+        }
+
+        public static string Get_Local_Capture_Filter_Mode()
+        {
+            string mode = "default";
+            try
+            {
+                using (SqliteConnection connection = new SqliteConnection(db_connection))
+                {
+                    connection.Open();
+                    SqliteCommand command = new SqliteCommand(@"
+                    select setting_value from local_settings where setting_key = @key limit 1
+                    ", connection);
+                    command.Parameters.AddWithValue("@key", "capture_filter_mode");
+                    object results = command.ExecuteScalar();
+                    if (results != DBNull.Value && results != null)
+                    {
+                        mode = results.ToString() ?? "default";
+                    }
+                }
+            }
+            catch
+            {
+                Debug.WriteLine("could not send sql command");
+            }
+
+            if (mode != "none")
+            {
+                mode = "default";
+            }
+
+            return mode;
+        }
+
+        public static bool Get_Local_Show_Enemy_Id()
+        {
+            bool showEnemyId = true;
+            try
+            {
+                using (SqliteConnection connection = new SqliteConnection(db_connection))
+                {
+                    connection.Open();
+                    SqliteCommand command = new SqliteCommand(@"
+                    select setting_value from local_settings where setting_key = @key limit 1
+                    ", connection);
+                    command.Parameters.AddWithValue("@key", "show_enemy_id");
+                    object results = command.ExecuteScalar();
+                    if (results != DBNull.Value && results != null)
+                    {
+                        string value = results.ToString() ?? "true";
+                        showEnemyId = value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                            || value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                            || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+            }
+            catch
+            {
+                Debug.WriteLine("could not send sql command");
+            }
+
+            return showEnemyId;
+        }
+
+        public static void Set_Local_Capture_Filter_Mode(string mode)
+        {
+            if (mode != "none")
+            {
+                mode = "default";
+            }
+
+            try
+            {
+                using (SqliteConnection connection = new SqliteConnection(db_connection))
+                {
+                    connection.Open();
+                    SqliteCommand command = new SqliteCommand(@"
+                        insert or replace into local_settings (setting_key, setting_value)
+                            values(@key, @value)
+                    ", connection);
+                    command.Parameters.AddWithValue("@key", "capture_filter_mode");
+                    command.Parameters.AddWithValue("@value", mode);
+                    command.ExecuteNonQuery();
+                }
+            }
+            catch
+            {
+                Debug.WriteLine("could not send sql command");
+            }
+        }
+
+        public static void Set_Local_Show_Enemy_Id(bool showEnemyId)
+        {
+            try
+            {
+                using (SqliteConnection connection = new SqliteConnection(db_connection))
+                {
+                    connection.Open();
+                    SqliteCommand command = new SqliteCommand(@"
+                        insert or replace into local_settings (setting_key, setting_value)
+                            values(@key, @value)
+                    ", connection);
+                    command.Parameters.AddWithValue("@key", "show_enemy_id");
+                    command.Parameters.AddWithValue("@value", showEnemyId ? "true" : "false");
                     command.ExecuteNonQuery();
                 }
             }
