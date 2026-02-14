@@ -1,4 +1,4 @@
-﻿using Mabinogi_Damage_Tracker;
+using Mabinogi_Damage_Tracker;
 using PacketDotNet;
 using SharpPcap.LibPcap;
 using SharpPcap;
@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using System.Text;
 using Microsoft.AspNetCore.Identity.UI.Services;
 using System;
+using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection.Metadata.Ecma335;
 using SQLitePCL;
@@ -35,6 +36,158 @@ namespace Mabinogi_Damage_tracker
             static CaptureFileReaderDevice device = new CaptureFileReaderDevice("C:/packets/full glenn vhm run.pcapng");
         #endif
         static Thread reader;
+
+        private const int DamageDedupeWindowMs = 1500;
+        private static readonly object DamageDedupeLock = new object();
+        private static readonly Queue<DamageKeyEntry> DamageDedupeQueue = new Queue<DamageKeyEntry>();
+        private static readonly Dictionary<DamageKey, long> DamageDedupeMap = new Dictionary<DamageKey, long>();
+
+        private static readonly object PlayerNameLock = new object();
+        private static readonly Dictionary<ulong, string> PlayerNameCache = new Dictionary<ulong, string>();
+
+        public static bool ShowEnemyId { get; private set; } = true;
+
+        public static void Set_Show_Enemy_Id(bool show)
+        {
+            ShowEnemyId = show;
+        }
+
+        private readonly struct DamageKey : IEquatable<DamageKey>
+        {
+            public readonly ulong AttackerId;
+            public readonly ulong EnemyId;
+            public readonly uint CombatActionId;
+            public readonly int DamageBits;
+            public readonly ushort SkillId;
+            public readonly ushort SubSkillId;
+
+            public DamageKey(ulong attackerId, ulong enemyId, uint combatActionId, float damage, ushort skillId, ushort subSkillId)
+            {
+                AttackerId = attackerId;
+                EnemyId = enemyId;
+                CombatActionId = combatActionId;
+                DamageBits = BitConverter.SingleToInt32Bits(damage);
+                SkillId = skillId;
+                SubSkillId = subSkillId;
+            }
+
+            public bool Equals(DamageKey other)
+            {
+                return AttackerId == other.AttackerId
+                    && EnemyId == other.EnemyId
+                    && CombatActionId == other.CombatActionId
+                    && DamageBits == other.DamageBits
+                    && SkillId == other.SkillId
+                    && SubSkillId == other.SubSkillId;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is DamageKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                HashCode hash = new HashCode();
+                hash.Add(AttackerId);
+                hash.Add(EnemyId);
+                hash.Add(CombatActionId);
+                hash.Add(DamageBits);
+                hash.Add(SkillId);
+                hash.Add(SubSkillId);
+                return hash.ToHashCode();
+            }
+        }
+
+        private readonly struct DamageKeyEntry
+        {
+            public readonly DamageKey Key;
+            public readonly long Timestamp;
+
+            public DamageKeyEntry(DamageKey key, long timestamp)
+            {
+                Key = key;
+                Timestamp = timestamp;
+            }
+        }
+
+        private static bool ShouldSkipDamage(DamageKey key, long nowMs)
+        {
+            lock (DamageDedupeLock)
+            {
+                CleanupDamageDedupe(nowMs);
+                if (DamageDedupeMap.TryGetValue(key, out long lastSeen) && nowMs - lastSeen <= DamageDedupeWindowMs)
+                {
+                    return true;
+                }
+
+                DamageDedupeMap[key] = nowMs;
+                DamageDedupeQueue.Enqueue(new DamageKeyEntry(key, nowMs));
+                return false;
+            }
+        }
+
+        private static string GetPlayerDisplayName(ulong playerId)
+        {
+            string name = "";
+            lock (PlayerNameLock)
+            {
+                if (PlayerNameCache.TryGetValue(playerId, out string cachedName))
+                {
+                    name = cachedName;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                name = db_helper.Get_Player_Name((Int64)playerId);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    lock (PlayerNameLock)
+                    {
+                        PlayerNameCache[playerId] = name;
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return playerId.ToString();
+            }
+
+            return name;
+        }
+
+        private static string GetEnemyDisplay(ulong enemyId)
+        {
+            return ShowEnemyId ? enemyId.ToString() : "hidden";
+        }
+
+        private static string FormatDamage(float damage)
+        {
+            double rounded = Math.Round(damage);
+            bool isWhole = Math.Abs(damage - rounded) < 0.05;
+            string format = isWhole ? "N0" : "N1";
+            return damage.ToString(format, CultureInfo.CurrentCulture);
+        }
+
+        private static void CleanupDamageDedupe(long nowMs)
+        {
+            while (DamageDedupeQueue.Count > 0)
+            {
+                DamageKeyEntry entry = DamageDedupeQueue.Peek();
+                if (nowMs - entry.Timestamp <= DamageDedupeWindowMs)
+                {
+                    break;
+                }
+
+                DamageDedupeQueue.Dequeue();
+                if (DamageDedupeMap.TryGetValue(entry.Key, out long lastSeen) && lastSeen == entry.Timestamp)
+                {
+                    DamageDedupeMap.Remove(entry.Key);
+                }
+            }
+        }
 
 
         //i am unconvinced this is the best way to handle the thread managing the event handler
@@ -70,6 +223,11 @@ namespace Mabinogi_Damage_tracker
             LogsController.WriteLog("Starting Parser.");
 
             string filter = "ip and tcp and tcp portrange 11020-11023";
+            string filterMode = db_helper.Get_Local_Capture_Filter_Mode();
+            bool useFilter = filterMode != "none";
+            LogsController.WriteLog(string.Format("Capture filter mode: {0}", filterMode));
+            ShowEnemyId = db_helper.Get_Local_Show_Enemy_Id();
+            LogsController.WriteLog(string.Format("Show enemy id: {0}", ShowEnemyId));
 #if DEBUG_LIVE || RELEASE
             //populate a list of adapters for the front end
             adapters = LibPcapLiveDeviceList.Instance.Select(a => a.Description).ToList();
@@ -93,7 +251,10 @@ namespace Mabinogi_Damage_tracker
                 {
                     Debug.WriteLine(dev.Description.ToString());
                     dev.Open(DeviceModes.Promiscuous, 1000);
-                    dev.Filter = filter;
+                    if (useFilter)
+                    {
+                        dev.Filter = filter;
+                    }
 
                     Stopwatch watchdog = Stopwatch.StartNew();
 
@@ -128,7 +289,10 @@ namespace Mabinogi_Damage_tracker
             try
              {
                 device.Open(DeviceModes.Promiscuous);
-                device.Filter = filter;
+                if (useFilter)
+                {
+                    device.Filter = filter;
+                }
                 device.OnPacketArrival += Device_OnPacketArrival;
                 captureFileWriter.Open();
 #if DEBUG_FILE
@@ -596,9 +760,23 @@ namespace Mabinogi_Damage_tracker
 
                         if(damage < 0 || damage > 100000000 || skillid == 601 || skillid == 512 || skillid == 590) { break; }
 
-                        LogsController.WriteLog(string.Format("[DAMAGE] Attacker: {0} -> Enemy: {1} for {2}", attacker_id, enemy_id, damage));
-                        Debug.WriteLine("Damage {0}, Wound {1}, mana Damage {2}, Attacker {3} {4} -> Enemy {5}, with {6} : {7}", damage.ToString("0.0"), wound.ToString("0.0"), manaDamage, attacker_id, "", enemy_id, skill, subskill);
-                        db_helper.add_damage((Int64)attacker_id, damage, wound, (int)manaDamage, (Int64)enemy_id, skillid, subskillid);
+                        DamageKey dedupeKey = new DamageKey(attacker_id, enemy_id, combatActionID, damage, skillid, subskillid);
+                        if (!ShouldSkipDamage(dedupeKey, Environment.TickCount64))
+                        {
+                            string attackerDisplay = GetPlayerDisplayName(attacker_id);
+                            string enemyDisplay = GetEnemyDisplay(enemy_id);
+                            string damageDisplay = FormatDamage(damage);
+                            if (ShowEnemyId)
+                            {
+                                LogsController.WriteLog(string.Format("[DAMAGE] {0} hit enemy {1} for {2}", attackerDisplay, enemyDisplay, damageDisplay));
+                            }
+                            else
+                            {
+                                LogsController.WriteLog(string.Format("[DAMAGE] {0} hit enemy for {1}", attackerDisplay, damageDisplay));
+                            }
+                            Debug.WriteLine("Damage {0}, Wound {1}, mana Damage {2}, Attacker {3} {4} -> Enemy {5}, with {6} : {7}", damage.ToString("0.0"), wound.ToString("0.0"), manaDamage, attacker_id, "", enemy_id, skill, subskill);
+                            db_helper.add_damage((Int64)attacker_id, damage, wound, (int)manaDamage, (Int64)enemy_id, skillid, subskillid);
+                        }
                     }
                     cursor = subsub_pack_start_cursor + (int)subsub_pack_len;
                 }
@@ -642,11 +820,17 @@ namespace Mabinogi_Damage_tracker
                 //the next [namelength] bytes is the name
 
                 string playername = Encoding.UTF8.GetString(packet.PayloadData, cursor, (int)namelength - 1);
+                playername = playername.Trim();
 
-                if (Regex.IsMatch(playername, @"[^a-zA-Z0-9+]")) { return; }
+                if (playername.Length == 0 || playername.Length > 36) { return; }
+                if (!IsValidPlayerName(playername)) { return; }
 
                 //character_names.Add(new Name(playername, playerid));
                 db_helper.add_player(playername, (Int64)playerid);
+                lock (PlayerNameLock)
+                {
+                    PlayerNameCache[playerid] = playername;
+                }
                 LogsController.WriteLog("[PLAYER DISCOVERED]" + playerid.ToString() + " -> " + playername);
                 Debug.WriteLine("chat message read, playerid: {0}, username {1}", playerid.ToString(), playername);
             }
@@ -689,6 +873,19 @@ namespace Mabinogi_Damage_tracker
             parsedint = 0;
             bytesread = -1;
             return;
+        }
+
+        private static bool IsValidPlayerName(string playername)
+        {
+            foreach (char c in playername)
+            {
+                if (char.IsControl(c) || c == '\uFFFD')
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
     }
