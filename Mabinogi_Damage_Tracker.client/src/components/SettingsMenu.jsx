@@ -23,6 +23,8 @@ export default function SettingsMenu() {
     const [themeChecked, setThemeChecked] = useState(mode === 'dark' ? true : false);
     const [adapters, setAdapters] = useState([]);
     const [selectedAdapter, setSelectedAdapter] = useState('');
+    const [filterMode, setFilterMode] = useState('default');
+    const [showEnemyId, setShowEnemyId] = useState(true);
     const [open, setOpen] = useState(false);
     const [severity, setSeverity] = useState("success");
     const [AlertMessage, setAlertMessage] = useState("");
@@ -41,6 +43,20 @@ export default function SettingsMenu() {
             .then(response => response.json())
             .then(data => {
                 setAdapters(data);
+            })
+            .catch(error => console.error('Error:', error));
+
+        fetch(`http://${window.location.hostname}:5004/Home/GetCaptureFilterMode`)
+            .then(response => response.json())
+            .then(data => {
+                setFilterMode(data === 'none' ? 'none' : 'default');
+            })
+            .catch(error => console.error('Error:', error));
+
+        fetch(`http://${window.location.hostname}:5004/Home/GetShowEnemyId`)
+            .then(response => response.json())
+            .then(data => {
+                setShowEnemyId(Boolean(data));
             })
             .catch(error => console.error('Error:', error));
     }, []);
@@ -63,6 +79,36 @@ export default function SettingsMenu() {
         } else {
             setSeverity('error');
             setAlertMessage("Error Saving Adapter.");
+        }
+    };
+
+    const handleCaptureFilterChange = async (event) => {
+        const mode = event.target.checked ? 'none' : 'default';
+
+        setFilterMode(mode);
+        const response = await fetch(`http://${window.location.hostname}:5004/Home/SaveCaptureFilterMode?mode=${encodeURIComponent(mode)}`);
+        setOpen(true);
+        if (response.ok) {
+            setSeverity('success');
+            setAlertMessage("Capture filter saved. Restart parser to apply.");
+        } else {
+            setSeverity('error');
+            setAlertMessage("Error saving capture filter.");
+        }
+    };
+
+    const handleShowEnemyIdChange = async (event) => {
+        const show = event.target.checked;
+
+        setShowEnemyId(show);
+        const response = await fetch(`http://${window.location.hostname}:5004/Home/SaveShowEnemyId?show=${show}`);
+        setOpen(true);
+        if (response.ok) {
+            setSeverity('success');
+            setAlertMessage("Enemy ID display updated.");
+        } else {
+            setSeverity('error');
+            setAlertMessage("Error saving enemy ID display.");
         }
     };
 
@@ -122,6 +168,30 @@ export default function SettingsMenu() {
 
                         setPollingRate(value);
                     }} />
+            </Box>
+            <Divider />
+            <Box sx={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Box>
+                    <Typography sx={{ alignSelf: 'flex-start' }} variant='h4'>Capture Filter</Typography>
+                    <Typography sx={{ alignSelf: 'flex-start' }} variant='subtitle'>Default uses Mabi ports (11020-11023). None captures all packets.</Typography>
+                </Box>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center', grow: 2, alignSelf: 'flex-end' }}>
+                    <Typography>Default</Typography>
+                    <Switch checked={filterMode === 'none'} onChange={handleCaptureFilterChange} />
+                    <Typography>None</Typography>
+                </Stack>
+            </Box>
+            <Divider />
+            <Box sx={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Box>
+                    <Typography sx={{ alignSelf: 'flex-start' }} variant='h4'>Enemy ID</Typography>
+                    <Typography sx={{ alignSelf: 'flex-start' }} variant='subtitle'>Shows enemy ID in the event logs.</Typography>
+                </Box>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center', grow: 2, alignSelf: 'flex-end' }}>
+                    <Typography>Hide</Typography>
+                    <Switch checked={showEnemyId} onChange={handleShowEnemyIdChange} />
+                    <Typography>Show</Typography>
+                </Stack>
             </Box>
             <Divider />
             <Box sx={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between' }}>
