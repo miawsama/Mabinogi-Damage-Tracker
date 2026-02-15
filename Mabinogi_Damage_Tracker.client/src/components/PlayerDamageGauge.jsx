@@ -30,7 +30,7 @@ function formatLargeNumber(num) {
     return formatted.replace(/\.0(?=[A-Z])/, '');
 }
 
-function GaugePointer({ }) {
+function GaugePointer() {
     const { valueAngle, outerRadius, cx, cy } = useGaugeState();
 
     if (valueAngle === null) {
